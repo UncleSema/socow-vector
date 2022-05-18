@@ -1,5 +1,6 @@
 #pragma once
 #include <cstddef>
+#include <array>
 
 template <typename T, size_t SMALL_SIZE>
 struct socow_vector {
