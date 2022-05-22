@@ -264,7 +264,7 @@ private:
     struct buffer_data {
       size_t links;
       size_t capacity_;
-      T data_[];
+      T data_[0];
     };
 
     buffer_data* buffer_data_;
