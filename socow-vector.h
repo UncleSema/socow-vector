@@ -100,11 +100,17 @@ struct socow_vector {
       new (end()) T(e);
     } else {
       buffer new_buffer(2 * capacity());
-      copy(begin(), end(), new_buffer.data());
-      new (new_buffer.data() + size_) T(e);
-      destroy_elements(begin(), end());
+      copy(cbegin(), cend(), new_buffer.data());
+      try {
+        new (new_buffer.data() + size_) T(e);
+      } catch (...) {
+        new_buffer.~buffer();
+        throw;
+      }
       if (!small_) {
-        buffer_.~buffer();
+        destroy_buffer(*this);
+      } else {
+        destroy_elements(begin(), end());
       }
       new (&buffer_) buffer(new_buffer);
       small_ = false;
@@ -145,7 +151,9 @@ struct socow_vector {
           new (&buffer_) buffer(temp);
           throw;
         }
-        destroy_elements(temp.data(), temp.data() + size_);
+        if (temp.unique()) {
+          destroy_elements(temp.data(), temp.data() + size_);
+        }
         small_ = true;
       } else if (size_ != buffer_.capacity()) {
         new (&buffer_) buffer(realloc(size_, cbegin(), cend()));
@@ -154,20 +162,44 @@ struct socow_vector {
   }
 
   void clear() {
-    destroy_elements(begin(), end());
+    if (small_ || buffer_.unique()) {
+      destroy_elements(begin(), end());
+    } else {
+      size_t cap = buffer_.capacity();
+      destroy_buffer(*this);
+      new (&buffer_) buffer(cap);
+    }
     size_ = 0;
   }
 
   void swap(socow_vector& other) {
-    if (small_) {
-      make_big(SMALL_SIZE);
+    using std::swap;
+    if (small_ && other.small_) {
+      for (size_t i = 0; i < std::min(size_, other.size_); i++) {
+        swap(static_buffer_[i], other.static_buffer_[i]);
+      }
+      if (size_ < other.size_) {
+        copy(other.static_buffer_.begin() + size_,
+             other.static_buffer_.begin() + other.size_,
+             static_buffer_.begin() + size_);
+        destroy_elements(other.static_buffer_.begin() + size_,
+                         other.static_buffer_.begin() + other.size_);
+      } else {
+        copy(static_buffer_.begin() + other.size_,
+             static_buffer_.begin() + size_,
+             other.static_buffer_.begin() + other.size_);
+        destroy_elements(static_buffer_.begin() + other.size_,
+                         static_buffer_.begin() + size_);
+      }
+    } else if (!small_ && !other.small_) {
+      swap(other.buffer_, buffer_);
+    } else if (small_ && !other.small_) {
+      swap_small_big(*this, other);
+    } else {
+      swap_small_big(other, *this);
     }
-    if (other.small_) {
-      other.make_big(SMALL_SIZE);
-    }
-    std::swap(other.buffer_, buffer_);
-    std::swap(other.size_, size_);
-    std::swap(other.small_, small_);
+    swap(other.size_, size_);
+    swap(small_, other.small_);
   }
 
   iterator begin() {
@@ -190,8 +222,9 @@ struct socow_vector {
     size_t index = pos - cbegin();
     push_back(value);
     iterator iter = begin() + index;
+    using std::swap;
     for (iterator i = end() - 1; i != iter; i--) {
-      std::swap(*i, *(i - 1));
+      swap(*i, *(i - 1));
     }
     return iter;
   }
@@ -204,8 +237,9 @@ struct socow_vector {
     size_t index1 = first - cbegin();
     size_t index2 = last - cbegin();
     size_t to = cend() - last;
+    using std::swap;
     for (size_t i = 0; i < to; i++) {
-      std::swap(data()[i + index1], data()[i + index2]);
+      swap(data()[i + index1], data()[i + index2]);
     }
     for (int i = 0; i < index2 - index1; i++) {
       pop_back();
@@ -231,13 +265,14 @@ private:
     buffer& operator=(buffer const& other) {
       if (&other != this) {
         buffer temp(other);
-        std::swap(temp.buffer_data_, this->buffer_data_);
+        using std::swap;
+        swap(temp.buffer_data_, this->buffer_data_);
       }
       return *this;
     }
 
     ~buffer() {
-      if (buffer_data_->links == 1) {
+      if (unique()) {
         operator delete(buffer_data_);
       } else {
         buffer_data_->links--;
@@ -298,17 +333,13 @@ private:
                  const_iterator end) {
     if (new_capacity == 0) {
       small_ = true;
-      buffer empty;
-      return empty;
+      return buffer();
     }
     size_ = end - begin;
     buffer new_buffer(new_capacity);
     copy(begin, end, new_buffer.data());
     if (!small_) {
-      if (buffer_.data() != nullptr && buffer_.unique()) {
-        destroy_elements(buffer_.data(), buffer_.data() + size_);
-      }
-      buffer_.~buffer();
+      destroy_buffer(*this);
     }
     return new_buffer;
   }
@@ -317,6 +348,30 @@ private:
     for (auto it = begin; it != end; it++) {
       it->~T();
     }
+  }
+
+  static void destroy_buffer(socow_vector& vector) {
+    if (!vector.small_) {
+      if (vector.buffer_.unique()) {
+        destroy_elements(vector.begin(), vector.end());
+      }
+      vector.buffer_.~buffer();
+    }
+  }
+
+  void swap_small_big(socow_vector& small, socow_vector& big) {
+    buffer temp = big.buffer_;
+    big.buffer_.~buffer();
+    try {
+      copy(small.static_buffer_.begin(),
+           small.static_buffer_.begin() + small.size_,
+           big.static_buffer_.begin());
+    } catch (...) {
+      new (&big.buffer_) buffer(temp);
+      throw;
+    }
+    destroy_elements(small.begin(), small.end());
+    new (&small.buffer_) buffer(temp);
   }
 
   size_t size_{0};
