@@ -104,11 +104,11 @@ struct socow_vector {
       try {
         new (new_buffer.data() + size_) T(e);
       } catch (...) {
-        new_buffer.~buffer();
+        destroy_buffer();
         throw;
       }
       if (!small_) {
-        destroy_buffer(*this);
+        destroy_buffer();
       } else {
         destroy_elements(begin(), end());
       }
@@ -166,7 +166,7 @@ struct socow_vector {
       destroy_elements(begin(), end());
     } else {
       size_t cap = buffer_.capacity();
-      destroy_buffer(*this);
+      destroy_buffer();
       new (&buffer_) buffer(cap);
     }
     size_ = 0;
@@ -339,7 +339,7 @@ private:
     buffer new_buffer(new_capacity);
     copy(begin, end, new_buffer.data());
     if (!small_) {
-      destroy_buffer(*this);
+      destroy_buffer();
     }
     return new_buffer;
   }
@@ -350,12 +350,12 @@ private:
     }
   }
 
-  static void destroy_buffer(socow_vector& vector) {
-    if (!vector.small_) {
-      if (vector.buffer_.unique()) {
-        destroy_elements(vector.begin(), vector.end());
+  void destroy_buffer() {
+    if (!small_) {
+      if (buffer_.unique()) {
+        destroy_elements(begin(), end());
       }
-      vector.buffer_.~buffer();
+      buffer_.~buffer();
     }
   }
 
